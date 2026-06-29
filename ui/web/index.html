@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BTC 15m Bot Dashboard</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <h1>BTC 15m Kalshi Bot</h1>
+        <p class="subtitle">Live paper trading dashboard</p>
+      </div>
+      <div class="topbar-meta">
+        <span id="trade-mode" class="badge">--</span>
+        <span id="last-updated" class="muted">Connecting...</span>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <span class="label">Uptime</span>
+        <span id="stat-uptime" class="value">--</span>
+      </article>
+      <article class="stat-card">
+        <span class="label">BTC Spot</span>
+        <span id="stat-spot" class="value">--</span>
+      </article>
+      <article class="stat-card">
+        <span class="label">Bankroll</span>
+        <span id="stat-bankroll" class="value">--</span>
+      </article>
+      <article class="stat-card highlight">
+        <span class="label">Paper PnL</span>
+        <span id="stat-pnl" class="value">--</span>
+      </article>
+      <article class="stat-card">
+        <span class="label">Win Rate</span>
+        <span id="stat-winrate" class="value">--</span>
+      </article>
+      <article class="stat-card">
+        <span class="label">Record</span>
+        <span id="stat-record" class="value">--</span>
+      </article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="panel-head">
+        <h2>Profit over time</h2>
+        <span id="chart-subtitle" class="muted">Cumulative realized PnL</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="pnl-chart"></canvas>
+      </div>
+    </section>
+
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Current picks</h2>
+          <span id="picks-count" class="muted">0 markets</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Direction</th>
+                <th>Price</th>
+                <th>Model</th>
+                <th>Edge</th>
+                <th>Conf</th>
+                <th>Stake</th>
+                <th>Closes</th>
+              </tr>
+            </thead>
+            <tbody id="picks-body">
+              <tr><td colspan="7" class="empty">Waiting for data...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Paper trades</h2>
+          <span id="open-count" class="muted">0 open</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Side</th>
+                <th>Entry</th>
+                <th>Status</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="trades-body">
+              <tr><td colspan="5" class="empty">No trades yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

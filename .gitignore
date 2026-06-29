@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+secrets/
+logs/
+data/btc_history.db
+data/placed_orders.json
+models/saved/*.pkl
