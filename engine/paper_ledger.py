@@ -27,11 +27,12 @@ class PaperLedgerSummary:
     win_rate: float
     open_positions: int
 
-    def format_footer(self) -> str:
+    def format_footer(self, live: bool = False) -> str:
+        label = "Live" if live else "Paper"
         if self.resolved_bets == 0 and self.open_positions == 0:
-            return "Paper: no trades yet"
+            return f"{label}: no trades yet"
         parts = [
-            f"Paper PnL: ${self.realized_pnl:+.2f}",
+            f"{label} PnL: ${self.realized_pnl:+.2f}",
             f"Bankroll: ${self.current_bankroll:.2f}",
         ]
         if self.resolved_bets:

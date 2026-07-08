@@ -281,7 +281,9 @@ class Dashboard:
                         )
                     paper_summary = None
                     if self.trader and self.trader.paper:
-                        paper_summary = self.trader.paper.summary().format_footer()
+                        paper_summary = self.trader.paper.summary().format_footer(
+                            live=self.trade_mode == "live"
+                        )
                     last_updated = datetime.now(timezone.utc).strftime(
                         "%H:%M:%S UTC"
                     )

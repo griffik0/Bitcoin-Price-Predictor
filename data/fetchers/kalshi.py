@@ -282,6 +282,43 @@ class KalshiClient:
             "spread": (yes_ask - yes_bid) if yes_bid and yes_ask else None,
         }
 
+    def get_execution_quote(self, market_ticker: str) -> dict[str, Any] | None:
+        """Correct top-of-book bid/ask (cents) for ORDER PLACEMENT only.
+
+        Separate from get_market_orderbook so the prediction pipeline keeps its
+        original (unchanged) inputs. Kalshi book arrays are sorted ascending, so
+        the best bid is the last element; the YES ask is derived from the best
+        NO bid (yes_ask = 100 - best_no_bid) and vice versa.
+        """
+        try:
+            data = self._request("GET", f"/markets/{market_ticker}/orderbook")
+        except (KalshiNotFoundError, RuntimeError):
+            return None
+        # Kalshi returns the book under "orderbook_fp" (fixed-point dollars) with
+        # "yes_dollars"/"no_dollars" arrays; older shapes used "orderbook"/"yes".
+        ob = data.get("orderbook_fp") or data.get("orderbook") or data
+
+        def best_bid(levels: list | None) -> float | None:
+            # Book arrays are ascending by price, so the best bid is the last row.
+            if not levels or not levels[-1]:
+                return None
+            return self._to_cents(levels[-1][0])
+
+        yes_bids = ob.get("yes_dollars") or ob.get("yes") or []
+        no_bids = ob.get("no_dollars") or ob.get("no") or []
+
+        yes_bid = best_bid(yes_bids)
+        no_bid = best_bid(no_bids)
+        yes_ask = (100 - no_bid) if no_bid is not None else None
+
+        return {
+            "ticker": market_ticker,
+            "yes_bid": yes_bid,
+            "no_bid": no_bid,
+            "yes_ask": yes_ask,
+            "spread": (yes_ask - yes_bid) if yes_bid and yes_ask else None,
+        }
+
     def get_resolved_markets(self, limit: int = 500) -> list[dict[str, Any]]:
         """Return settled KXBTC15M markets for training."""
         markets: list[dict[str, Any]] = []

@@ -194,6 +194,22 @@ function renderState(data) {
   badge.textContent = mode;
   badge.className = `badge ${mode.replace("_", "-")}`;
 
+  const isLive = mode === "live";
+  const pnlLabel = document.getElementById("pnl-label");
+  if (pnlLabel) pnlLabel.textContent = isLive ? "Live PnL" : "Paper PnL";
+  const subtitle = document.getElementById("dashboard-subtitle");
+  if (subtitle) {
+    subtitle.textContent = isLive
+      ? "Live trading dashboard"
+      : "Live paper trading dashboard";
+  }
+  const chartSubtitle = document.getElementById("chart-subtitle");
+  if (chartSubtitle) {
+    chartSubtitle.textContent = isLive
+      ? "Cumulative realized PnL (live)"
+      : "Cumulative realized PnL";
+  }
+
   document.getElementById("last-updated").textContent =
     data.updated_at ? `Updated ${fmtTime(data.updated_at)}` : "Waiting...";
 

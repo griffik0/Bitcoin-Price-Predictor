@@ -110,6 +110,9 @@ MAX_TOTAL_EXPOSURE_PCT = 0.5
 MAX_ORDERS_PER_CYCLE = int(os.getenv("MAX_ORDERS_PER_CYCLE", "1"))
 MIN_ORDER_STAKE_USD = float(os.getenv("MIN_ORDER_STAKE_USD", "0.10"))
 ORDER_DELAY_SECONDS = float(os.getenv("ORDER_DELAY_SECONDS", "2.0"))
+# Extra cents added to the ask when placing a marketable buy, so the order
+# still crosses if the book ticks against us between the read and the order.
+MARKETABLE_BUFFER_CENTS = int(os.getenv("MARKETABLE_BUFFER_CENTS", "3"))
 
 # Exit rules — 15m binaries: hold to settlement avoids panic-selling at 1¢ bids
 HOLD_TO_SETTLEMENT = os.getenv("HOLD_TO_SETTLEMENT", "true").lower() in (

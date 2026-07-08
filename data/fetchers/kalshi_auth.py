@@ -17,7 +17,7 @@ from config.settings import setup_logging
 
 logger = setup_logging()
 
-_ORDERS_PATH = "/portfolio/orders"
+_ORDERS_PATH = "/portfolio/events/orders"
 _POSITIONS_PATH = "/portfolio/positions"
 
 
@@ -115,10 +115,10 @@ class KalshiTradingClient:
         data = response.json()
         return data.get("market_positions", data.get("positions", []))
 
-    def create_order(self, body: dict[str, Any]) -> dict[str, Any]:
+    def _post_order(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(settings.KALSHI_RATE_LIMIT_MAX_RETRIES):
-            response = self._request("POST", _ORDERS_PATH, json_body=body)
+            response = self._request("POST", path, json_body=body)
             if response.status_code in (200, 201):
                 return response.json()
             if response.status_code == 429:
@@ -131,3 +131,6 @@ class KalshiTradingClient:
             )
             break
         raise last_error or RuntimeError("Kalshi order failed after retries")
+
+    def create_order(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._post_order(_ORDERS_PATH, body)
