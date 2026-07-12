@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from config.settings import setup_logging
 from data.fetchers.coinbase import CoinbaseClient
@@ -26,10 +27,20 @@ class PaperLedgerSummary:
     losses: int
     win_rate: float
     open_positions: int
+    resting_orders: int = 0
+    unfilled_orders: int = 0
+    would_wins: int = 0
+    would_losses: int = 0
+    hypothetical_pnl: float = 0.0
 
     def format_footer(self, live: bool = False) -> str:
         label = "Live" if live else "Paper"
-        if self.resolved_bets == 0 and self.open_positions == 0:
+        if (
+            self.resolved_bets == 0
+            and self.open_positions == 0
+            and self.resting_orders == 0
+            and self.unfilled_orders == 0
+        ):
             return f"{label}: no trades yet"
         parts = [
             f"{label} PnL: ${self.realized_pnl:+.2f}",
@@ -39,6 +50,14 @@ class PaperLedgerSummary:
             parts.append(f"{self.wins}W-{self.losses}L ({self.win_rate:.0%})")
         if self.open_positions:
             parts.append(f"{self.open_positions} open (${self.open_stake:.2f} at risk)")
+        if self.resting_orders:
+            parts.append(f"{self.resting_orders} resting")
+        if self.unfilled_orders:
+            parts.append(
+                f"{self.unfilled_orders} unfilled "
+                f"({self.would_wins}W-{self.would_losses}L hypo, "
+                f"${self.hypothetical_pnl:+.2f})"
+            )
         return "  |  ".join(parts)
 
 
@@ -92,6 +111,7 @@ class PaperLedger:
                 "opened_at": datetime.now(timezone.utc).isoformat(),
                 "floor_strike": strike,
                 "entry_spot": opp.spot_price,
+                "status": "open",
             }
         )
         logger.info(
@@ -102,6 +122,151 @@ class PaperLedger:
             price_cents,
             count * price_cents / 100,
         )
+
+    def record_order_placed(
+        self,
+        opp: BetOpportunity,
+        *,
+        count: int,
+        side: str,
+        limit_price_cents: int,
+        mid_price_cents: int,
+        order_id: str,
+        filled_count: int = 0,
+        fill_price_cents: int | None = None,
+    ) -> None:
+        """Track a live order immediately (resting or filled)."""
+        if self.has_traded(opp.market_ticker):
+            return
+        strike = opp.floor_strike if opp.floor_strike else opp.spot_price
+        if filled_count > 0:
+            entry = fill_price_cents or limit_price_cents
+            status = "open"
+            contracts = filled_count
+        else:
+            entry = limit_price_cents
+            status = "resting"
+            contracts = count
+        self.db.insert_paper_trade(
+            {
+                "ticker": opp.market_ticker,
+                "pick": opp.pick,
+                "direction": opp.direction,
+                "side": side,
+                "count": contracts,
+                "entry_price_cents": entry,
+                "stake_usd": contracts * entry / 100,
+                "closes_at": opp.closes_at,
+                "opened_at": datetime.now(timezone.utc).isoformat(),
+                "floor_strike": strike,
+                "entry_spot": opp.spot_price,
+                "status": status,
+                "order_id": order_id,
+                "mid_price_cents": mid_price_cents,
+            }
+        )
+        if status == "open":
+            logger.info(
+                "[LIVE] Filled %s | %s x%d @ %dc | id=%s",
+                opp.market_ticker,
+                side.upper(),
+                contracts,
+                entry,
+                order_id,
+            )
+        else:
+            logger.info(
+                "[LIVE] Resting %s | %s x%d @ %dc (mid %dc) | id=%s",
+                opp.market_ticker,
+                side.upper(),
+                contracts,
+                entry,
+                mid_price_cents,
+                order_id,
+            )
+
+    @staticmethod
+    def _position_contracts(position: dict[str, Any], side: str) -> int:
+        """Best-effort parse of Kalshi position size for yes/no side."""
+        side = side.lower()
+        if side == "yes":
+            for key in ("yes_count_fp", "yes_count", "position_fp", "position"):
+                raw = position.get(key)
+                if raw is not None:
+                    count = int(float(raw))
+                    if count > 0:
+                        return count
+        else:
+            for key in ("no_count_fp", "no_count"):
+                raw = position.get(key)
+                if raw is not None:
+                    count = int(float(raw))
+                    if count > 0:
+                        return count
+            raw = position.get("position_fp") or position.get("position")
+            if raw is not None:
+                count = int(float(raw))
+                if count < 0:
+                    return abs(count)
+        return 0
+
+    def sync_live_orders(
+        self,
+        kalshi: KalshiClient,
+        trading_client: Any | None,
+    ) -> int:
+        """Promote resting ledger rows when Kalshi shows a fill."""
+        if trading_client is None:
+            return 0
+        resting = self.db.get_resting_paper_trades()
+        if not resting:
+            return 0
+
+        positions_by_ticker: dict[str, dict[str, Any]] = {}
+        try:
+            for pos in trading_client.get_positions():
+                ticker = pos.get("ticker") or pos.get("market_ticker")
+                if ticker:
+                    positions_by_ticker[str(ticker)] = pos
+        except Exception as exc:
+            logger.warning("Position sync failed: %s", exc)
+            return 0
+
+        promoted = 0
+        for trade in resting:
+            ticker = trade["ticker"]
+            side = str(trade.get("side", "yes"))
+            pos = positions_by_ticker.get(ticker)
+            if not pos:
+                continue
+            count = self._position_contracts(pos, side)
+            if count <= 0:
+                continue
+            entry = int(trade.get("entry_price_cents") or 0)
+            self.db.promote_resting_paper_trade(
+                ticker,
+                count=count,
+                entry_price_cents=entry,
+            )
+            promoted += 1
+            logger.info(
+                "[LIVE] Resting order filled: %s | %s x%d @ %dc",
+                ticker,
+                side.upper(),
+                count,
+                entry,
+            )
+        return promoted
+
+    @staticmethod
+    def _hypothetical_pnl(
+        *,
+        won: bool,
+        entry_cents: int,
+        count: int,
+    ) -> float:
+        exit_cents = 100 if won else 0
+        return count * (exit_cents - entry_cents) / 100
 
     def record_early_exit(
         self,
@@ -153,9 +318,10 @@ class PaperLedger:
         return None
 
     def resolve_settled(self, kalshi: KalshiClient) -> int:
-        """Check open positions against Kalshi settlement and close resolved ones."""
+        """Check open/resting positions against Kalshi settlement."""
         open_trades = self.db.get_open_paper_trades()
-        if not open_trades:
+        resting_trades = self.db.get_resting_paper_trades()
+        if not open_trades and not resting_trades:
             return 0
 
         settled_map: dict[str, str] = {}
@@ -220,6 +386,53 @@ class PaperLedger:
                 pnl,
             )
 
+        for trade in resting_trades:
+            ticker = trade["ticker"]
+            result = settled_map.get(ticker)
+            market = kalshi.get_market(ticker)
+            if result is None and market:
+                strike = self._trade_strike(trade, market)
+                entry_spot = trade.get("entry_spot")
+                if entry_spot is not None:
+                    try:
+                        entry_spot = float(entry_spot)
+                    except (TypeError, ValueError):
+                        entry_spot = None
+                result = resolve_market_result(
+                    market,
+                    strike=strike,
+                    entry_spot=entry_spot,
+                    coinbase=coinbase,
+                    now=now,
+                )
+            if result not in ("yes", "no"):
+                continue
+
+            side = trade.get("side", "yes")
+            would_win = (result == "yes") if side == "yes" else (result == "no")
+            entry = int(trade["entry_price_cents"])
+            count = int(trade["count"])
+            hypo_pnl = self._hypothetical_pnl(
+                won=would_win,
+                entry_cents=entry,
+                count=count,
+            )
+            outcome = "would_win" if would_win else "would_lose"
+            self.db.finalize_unfilled_paper_trade(
+                ticker,
+                hypothetical_outcome=outcome,
+                hypothetical_pnl_usd=hypo_pnl,
+                closed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            resolved_count += 1
+            logger.info(
+                "[LIVE] Unfilled %s -> would have %s | %s | hypo PnL $%+.2f",
+                ticker,
+                result.upper(),
+                outcome.replace("_", " ").upper(),
+                hypo_pnl,
+            )
+
         return resolved_count
 
     def summary(self) -> PaperLedgerSummary:
@@ -235,6 +448,11 @@ class PaperLedger:
             losses=int(stats["losses"]),
             win_rate=float(stats["win_rate"]),
             open_positions=int(stats["open_positions"]),
+            resting_orders=int(stats["resting_orders"]),
+            unfilled_orders=int(stats["unfilled_orders"]),
+            would_wins=int(stats["would_wins"]),
+            would_losses=int(stats["would_losses"]),
+            hypothetical_pnl=float(stats["hypothetical_pnl"]),
         )
 
     def cumulative_pnl_series(self) -> list[float]:

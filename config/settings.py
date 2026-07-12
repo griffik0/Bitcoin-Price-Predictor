@@ -110,6 +110,9 @@ MAX_TOTAL_EXPOSURE_PCT = 0.5
 MAX_ORDERS_PER_CYCLE = int(os.getenv("MAX_ORDERS_PER_CYCLE", "1"))
 MIN_ORDER_STAKE_USD = float(os.getenv("MIN_ORDER_STAKE_USD", "0.10"))
 ORDER_DELAY_SECONDS = float(os.getenv("ORDER_DELAY_SECONDS", "2.0"))
+# Cents below mid (opp.contract_price) for resting entry limits. Predictions
+# and edge filters still use mid; only the live/dry-run order price is reduced.
+ENTRY_LIMIT_DISCOUNT_CENTS = int(os.getenv("ENTRY_LIMIT_DISCOUNT_CENTS", "0"))
 # Extra cents added to the ask when placing a marketable buy, so the order
 # still crosses if the book ticks against us between the read and the order.
 MARKETABLE_BUFFER_CENTS = int(os.getenv("MARKETABLE_BUFFER_CENTS", "3"))

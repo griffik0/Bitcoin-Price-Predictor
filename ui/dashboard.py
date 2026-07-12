@@ -117,6 +117,11 @@ class Dashboard:
             "win_rate": summary.win_rate,
             "open_positions": summary.open_positions,
             "open_stake": summary.open_stake,
+            "resting_orders": summary.resting_orders,
+            "unfilled_orders": summary.unfilled_orders,
+            "would_wins": summary.would_wins,
+            "would_losses": summary.would_losses,
+            "hypothetical_pnl": summary.hypothetical_pnl,
             "pnl_history": history,
             "trades": paper.db.get_recent_paper_trades(),
         }

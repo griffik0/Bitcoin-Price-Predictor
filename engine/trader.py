@@ -143,6 +143,13 @@ def marketable_limit_cents(ask_cents: int) -> int:
     return int(min(99, ask_cents + settings.MARKETABLE_BUFFER_CENTS))
 
 
+def entry_limit_cents(mid_contract_cents: float) -> int:
+    """Resting buy limit: a few cents under mid for better upside on fill."""
+    mid = int(max(1, min(99, round(mid_contract_cents))))
+    discount = max(0, settings.ENTRY_LIMIT_DISCOUNT_CENTS)
+    return int(max(1, min(99, mid - discount)))
+
+
 def _load_placed() -> dict[str, dict[str, str]]:
     if not _PLACED_LOG.is_file():
         return {}
@@ -401,6 +408,8 @@ class KalshiTrader:
             return results
 
         if self.paper:
+            if self.live and self._client:
+                self.paper.sync_live_orders(self._reader, self._client)
             self.paper.resolve_settled(self._reader)
 
         if self.live and not settings.AUTO_TRADE_LIVE:
@@ -455,9 +464,9 @@ class KalshiTrader:
 
             side = "yes" if opp.direction == "YES" else "no"
 
-            # "Buy in dollars": lift the ask for an immediate fill, sizing the
-            # contract count from the model's dollar stake at the ask price.
-            # Uses the execution-only quote so prediction inputs stay untouched.
+            # Guaranteed fill: lift the ask with a marketable IOC limit. Edge
+            # filters still use mid; execution uses the live book only.
+            mid_cents = int(max(1, min(99, round(opp.contract_price))))
             orderbook = self._reader.get_execution_quote(opp.market_ticker)
             yes_bid = orderbook.get("yes_bid") if orderbook else None
             yes_ask = orderbook.get("yes_ask") if orderbook else None
@@ -483,14 +492,14 @@ class KalshiTrader:
 
             if not self.live:
                 logger.info(
-                    "[DRY-RUN] Would BUY (dollars): %s | %s $%.2f -> %d @ ask %d¢ "
-                    "(limit %d¢) IOC | mkt %s %.0f%%",
+                    "[DRY-RUN] Would BUY: %s | %s x%d @ ask %d¢ "
+                    "(limit %d¢) IOC (~$%.2f) | mkt %s %.0f%%",
                     opp.pick,
                     side.upper(),
-                    opp.recommended_stake,
                     count,
                     ask_cents,
                     price_cents,
+                    count * ask_cents / 100,
                     opp.direction,
                     opp.market_implied_prob * 100,
                 )
@@ -520,12 +529,14 @@ class KalshiTrader:
             try:
                 assert self._client is not None
                 logger.info(
-                    "Placing LIVE buy: %s %s x%d limit %d¢ (ask %d¢, book yes_bid=%s yes_ask=%s) IOC",
+                    "Placing LIVE buy: %s %s x%d limit %d¢ (ask %d¢, mid %d¢, "
+                    "book yes_bid=%s yes_ask=%s) IOC",
                     opp.market_ticker,
                     side.upper(),
                     count,
                     price_cents,
                     ask_cents,
+                    mid_cents,
                     yes_bid,
                     yes_ask,
                 )
@@ -534,30 +545,34 @@ class KalshiTrader:
                 order_id = str(
                     payload.get("order_id", resp.get("order_id", ""))
                 )
-                filled_count = _filled_contract_count(resp, count)
+                filled_count = _filled_contract_count(resp, 0)
                 if filled_count <= 0:
                     raise RuntimeError(
-                        "buy-in-dollars order did not fill "
+                        "IOC buy did not fill "
                         f"(fill_count={payload.get('fill_count_fp', payload.get('fill_count', 0))}, "
                         f"remaining={payload.get('remaining_count', '?')}, "
                         f"sent limit={price_cents}¢ count={count})"
                     )
-                entry_price_cents = _entry_price_from_fill(
+                fill_price = _entry_price_from_fill(
                     opp.direction, resp, ask_cents
                 )
                 mark_placed(
                     opp.market_ticker,
                     order_id,
                     side=side,
-                    entry_price_cents=entry_price_cents,
+                    entry_price_cents=fill_price,
                     count=filled_count,
                 )
                 if self.paper:
-                    self.paper.record_entry(
+                    self.paper.record_order_placed(
                         opp,
-                        count=filled_count,
+                        count=count,
                         side=side,
-                        price_cents=entry_price_cents,
+                        limit_price_cents=fill_price,
+                        mid_price_cents=mid_cents,
+                        order_id=order_id,
+                        filled_count=filled_count,
+                        fill_price_cents=fill_price,
                     )
                 logger.info(
                     "ORDER FILLED: %s | %s $%.2f -> %d @ %d¢ | id=%s",
@@ -565,7 +580,7 @@ class KalshiTrader:
                     side.upper(),
                     opp.recommended_stake,
                     filled_count,
-                    entry_price_cents,
+                    fill_price,
                     order_id,
                 )
                 results.append(
@@ -575,7 +590,7 @@ class KalshiTrader:
                         action="buy",
                         count=filled_count,
                         side=side,
-                        price_cents=entry_price_cents,
+                        price_cents=fill_price,
                         stake_usd=opp.recommended_stake,
                         live=True,
                         success=True,

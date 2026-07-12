@@ -199,6 +199,10 @@ td.empty {
 .status-lost { color: var(--red); }
 .status-open { color: var(--yellow); }
 .status-sold { color: var(--muted); }
+.status-resting { color: #60a5fa; }
+.status-unfilled { color: var(--muted); }
+.status-would_win { color: var(--green); }
+.status-would_lose { color: var(--red); }
 
 .pnl-pos { color: var(--green); font-weight: 600; }
 .pnl-neg { color: var(--red); font-weight: 600; }

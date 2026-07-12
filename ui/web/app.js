@@ -131,14 +131,24 @@ function renderPicks(opportunities) {
     .join("");
 }
 
-function renderTrades(trades, openCount) {
+function statusLabel(status, hypoOutcome) {
+  const s = (status || "open").toLowerCase();
+  if (s === "unfilled" && hypoOutcome) {
+    return hypoOutcome.replace("_", " ");
+  }
+  return s;
+}
+
+function renderTrades(trades, paper) {
   const body = document.getElementById("trades-body");
+  const openCount = paper ? paper.open_positions || 0 : 0;
+  const resting = paper ? paper.resting_orders || 0 : 0;
   document.getElementById("open-count").textContent =
-    `${openCount} open`;
+    `${openCount} open${resting ? `, ${resting} resting` : ""}`;
 
   if (!trades.length) {
     body.innerHTML =
-      '<tr><td colspan="5" class="empty">No trades yet</td></tr>';
+      '<tr><td colspan="6" class="empty">No orders yet</td></tr>';
     return;
   }
 
@@ -146,18 +156,36 @@ function renderTrades(trades, openCount) {
     .map((t) => {
       const status = (t.status || "open").toLowerCase();
       const pnl = t.pnl_usd;
+      const hypo = t.hypothetical_pnl_usd;
+      const hypoOutcome = t.hypothetical_outcome;
       let pnlCell = "--";
-      if (pnl != null && status !== "open") {
+      if (pnl != null && ["won", "lost", "sold"].includes(status)) {
         const cls = pnl >= 0 ? "pnl-pos" : "pnl-neg";
         pnlCell = `<span class="${cls}">${fmtMoney(pnl)}</span>`;
+      } else if (status === "open") {
+        pnlCell = '<span class="muted">in play</span>';
+      } else if (status === "resting") {
+        pnlCell = '<span class="muted">pending</span>';
       }
+
+      let hypoCell = "--";
+      if (status === "unfilled" && hypo != null) {
+        const cls = hypo >= 0 ? "pnl-pos" : "pnl-neg";
+        const label = hypoOutcome === "would_win" ? "would win" : "would lose";
+        hypoCell = `<span class="${cls}" title="${label}">${fmtMoney(hypo)}</span>`;
+      }
+
       const shortTicker = (t.ticker || "").replace("KXBTC15M-", "");
+      const limit = t.entry_price_cents ?? "--";
+      const mid = t.mid_price_cents;
+      const limitTitle = mid != null ? `mid ${mid}c` : "";
       return `<tr>
         <td title="${t.ticker || ""}">${shortTicker}</td>
         <td>${(t.direction || t.side || "--").toUpperCase()}</td>
-        <td>${t.entry_price_cents ?? "--"}c</td>
-        <td class="status-${status}">${status}</td>
+        <td title="${limitTitle}">${limit}c</td>
+        <td class="status-${status}">${statusLabel(status, hypoOutcome)}</td>
         <td>${pnlCell}</td>
+        <td>${hypoCell}</td>
       </tr>`;
     })
     .join("");
@@ -189,6 +217,17 @@ function renderState(data) {
     document.getElementById("stat-record").textContent = "0W-0L";
   }
 
+  const restingEl = document.getElementById("stat-resting");
+  if (restingEl) {
+    restingEl.textContent = paper ? String(paper.resting_orders || 0) : "0";
+  }
+  const hypoEl = document.getElementById("stat-hypo-pnl");
+  if (hypoEl) {
+    const hypo = paper ? paper.hypothetical_pnl || 0 : 0;
+    hypoEl.textContent = paper && paper.unfilled_orders ? fmtMoney(hypo) : "--";
+    hypoEl.className = `value ${pnlClass(hypo)}`;
+  }
+
   const mode = (data.trade_mode || "off").toLowerCase();
   const badge = document.getElementById("trade-mode");
   badge.textContent = mode;
@@ -215,7 +254,7 @@ function renderState(data) {
 
   updateChart(paper ? paper.pnl_history : [{ at: "start", cumulative: 0 }]);
   renderPicks(data.opportunities || []);
-  renderTrades(paper ? paper.trades || [] : [], paper ? paper.open_positions || 0 : 0);
+  renderTrades(paper ? paper.trades || [] : [], paper);
 }
 
 async function poll() {

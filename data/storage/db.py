@@ -107,10 +107,21 @@ class Database:
                 row[1]
                 for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()
             }
-            if "floor_strike" not in cols:
-                conn.execute("ALTER TABLE paper_trades ADD COLUMN floor_strike REAL")
-            if "entry_spot" not in cols:
-                conn.execute("ALTER TABLE paper_trades ADD COLUMN entry_spot REAL")
+            migrations = {
+                "floor_strike": "ALTER TABLE paper_trades ADD COLUMN floor_strike REAL",
+                "entry_spot": "ALTER TABLE paper_trades ADD COLUMN entry_spot REAL",
+                "order_id": "ALTER TABLE paper_trades ADD COLUMN order_id TEXT",
+                "mid_price_cents": "ALTER TABLE paper_trades ADD COLUMN mid_price_cents INTEGER",
+                "hypothetical_pnl_usd": (
+                    "ALTER TABLE paper_trades ADD COLUMN hypothetical_pnl_usd REAL"
+                ),
+                "hypothetical_outcome": (
+                    "ALTER TABLE paper_trades ADD COLUMN hypothetical_outcome TEXT"
+                ),
+            }
+            for col, sql in migrations.items():
+                if col not in cols:
+                    conn.execute(sql)
 
     def _migrate_paper_trades_table(self) -> None:
         """Drop legacy UNIQUE(ticker) so closed trades don't block re-inserts."""
@@ -295,8 +306,9 @@ class Database:
                 """
                 INSERT INTO paper_trades (
                     ticker, pick, direction, side, count, entry_price_cents,
-                    stake_usd, closes_at, opened_at, status, floor_strike, entry_spot
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                    stake_usd, closes_at, opened_at, status, floor_strike,
+                    entry_spot, order_id, mid_price_cents
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trade["ticker"],
@@ -308,9 +320,65 @@ class Database:
                     trade.get("stake_usd"),
                     trade.get("closes_at"),
                     trade.get("opened_at"),
+                    trade.get("status", "open"),
                     trade.get("floor_strike"),
                     trade.get("entry_spot"),
+                    trade.get("order_id"),
+                    trade.get("mid_price_cents"),
                 ),
+            )
+
+    def get_resting_paper_trades(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM paper_trades
+                WHERE status = 'resting'
+                ORDER BY opened_at ASC
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def promote_resting_paper_trade(
+        self,
+        ticker: str,
+        *,
+        count: int,
+        entry_price_cents: int,
+    ) -> None:
+        stake = count * entry_price_cents / 100
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE paper_trades
+                SET status = 'open',
+                    count = ?,
+                    entry_price_cents = ?,
+                    stake_usd = ?
+                WHERE ticker = ? AND status = 'resting'
+                """,
+                (count, entry_price_cents, stake, ticker),
+            )
+
+    def finalize_unfilled_paper_trade(
+        self,
+        ticker: str,
+        *,
+        hypothetical_outcome: str,
+        hypothetical_pnl_usd: float,
+        closed_at: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE paper_trades
+                SET status = 'unfilled',
+                    hypothetical_outcome = ?,
+                    hypothetical_pnl_usd = ?,
+                    closed_at = ?
+                WHERE ticker = ? AND status = 'resting'
+                """,
+                (hypothetical_outcome, hypothetical_pnl_usd, closed_at, ticker),
             )
 
     def get_open_paper_trades(self) -> list[dict[str, Any]]:
@@ -349,7 +417,7 @@ class Database:
                     SUM(CASE WHEN pnl_usd <= 0 THEN 1 ELSE 0 END) AS losses,
                     COALESCE(SUM(pnl_usd), 0) AS total_pnl
                 FROM paper_trades
-                WHERE status != 'open'
+                WHERE status IN ('won', 'lost', 'sold')
                 """
             ).fetchone()
             open_row = conn.execute(
@@ -357,6 +425,22 @@ class Database:
                 SELECT COUNT(*) AS open_count,
                        COALESCE(SUM(stake_usd), 0) AS open_stake
                 FROM paper_trades WHERE status = 'open'
+                """
+            ).fetchone()
+            resting_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM paper_trades WHERE status = 'resting'"
+            ).fetchone()
+            unfilled_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS c,
+                    SUM(CASE WHEN hypothetical_outcome = 'would_win' THEN 1 ELSE 0 END)
+                        AS would_wins,
+                    SUM(CASE WHEN hypothetical_outcome = 'would_lose' THEN 1 ELSE 0 END)
+                        AS would_losses,
+                    COALESCE(SUM(hypothetical_pnl_usd), 0) AS hypo_pnl
+                FROM paper_trades
+                WHERE status = 'unfilled'
                 """
             ).fetchone()
         resolved = int(closed["resolved"] or 0)
@@ -369,6 +453,11 @@ class Database:
             "realized_pnl": float(closed["total_pnl"] or 0),
             "open_positions": int(open_row["open_count"] or 0),
             "open_stake": float(open_row["open_stake"] or 0),
+            "resting_orders": int(resting_row["c"] or 0),
+            "unfilled_orders": int(unfilled_row["c"] or 0),
+            "would_wins": int(unfilled_row["would_wins"] or 0),
+            "would_losses": int(unfilled_row["would_losses"] or 0),
+            "hypothetical_pnl": float(unfilled_row["hypo_pnl"] or 0),
         }
 
     def get_recent_paper_trades(self, limit: int = 30) -> list[dict[str, Any]]:
@@ -376,7 +465,9 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT ticker, pick, direction, side, count, entry_price_cents,
-                       stake_usd, status, pnl_usd, opened_at, closed_at
+                       mid_price_cents, stake_usd, status, pnl_usd,
+                       hypothetical_pnl_usd, hypothetical_outcome,
+                       order_id, opened_at, closed_at
                 FROM paper_trades
                 ORDER BY COALESCE(closed_at, opened_at) DESC, id DESC
                 LIMIT ?

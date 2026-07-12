@@ -45,6 +45,14 @@
         <span class="label">Record</span>
         <span id="stat-record" class="value">--</span>
       </article>
+      <article class="stat-card">
+        <span class="label">Resting</span>
+        <span id="stat-resting" class="value">--</span>
+      </article>
+      <article class="stat-card">
+        <span class="label">Hypo PnL</span>
+        <span id="stat-hypo-pnl" class="value">--</span>
+      </article>
     </section>
 
     <section class="panel chart-panel">
@@ -85,7 +93,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Paper trades</h2>
+          <h2>Orders &amp; trades</h2>
           <span id="open-count" class="muted">0 open</span>
         </div>
         <div class="table-wrap">
@@ -94,13 +102,14 @@
               <tr>
                 <th>Ticker</th>
                 <th>Side</th>
-                <th>Entry</th>
+                <th>Limit</th>
                 <th>Status</th>
-                <th>PnL</th>
+                <th>Actual PnL</th>
+                <th>Hypothetical</th>
               </tr>
             </thead>
             <tbody id="trades-body">
-              <tr><td colspan="5" class="empty">No trades yet</td></tr>
+              <tr><td colspan="6" class="empty">No orders yet</td></tr>
             </tbody>
           </table>
         </div>
