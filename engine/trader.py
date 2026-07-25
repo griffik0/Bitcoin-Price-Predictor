@@ -464,20 +464,11 @@ class KalshiTrader:
 
             side = "yes" if opp.direction == "YES" else "no"
 
-            # Guaranteed fill: lift the ask with a marketable IOC limit. Edge
-            # filters still use mid; execution uses the live book only.
+            # Limit at the model's mid-based contract price. Rests until filled
+            # or the market closes. Predictions already use this same mid.
             mid_cents = int(max(1, min(99, round(opp.contract_price))))
-            orderbook = self._reader.get_execution_quote(opp.market_ticker)
-            yes_bid = orderbook.get("yes_bid") if orderbook else None
-            yes_ask = orderbook.get("yes_ask") if orderbook else None
-            ask_cents = ask_price_cents(
-                opp.direction,
-                yes_bid=yes_bid,
-                yes_ask=yes_ask,
-                fallback_cents=opp.contract_price,
-            )
-            price_cents = marketable_limit_cents(ask_cents)
-            count = stake_to_contract_count(opp.recommended_stake, ask_cents)
+            price_cents = entry_limit_cents(opp.contract_price)
+            count = stake_to_contract_count(opp.recommended_stake, price_cents)
             if count <= 0:
                 continue
 
@@ -487,19 +478,19 @@ class KalshiTrader:
                 count,
                 price_cents,
                 action="buy",
-                time_in_force="immediate_or_cancel",
+                time_in_force="good_till_canceled",
             )
 
             if not self.live:
                 logger.info(
-                    "[DRY-RUN] Would BUY: %s | %s x%d @ ask %d¢ "
-                    "(limit %d¢) IOC (~$%.2f) | mkt %s %.0f%%",
+                    "[DRY-RUN] Would BUY: %s | %s x%d @ %d¢ (mid %d¢) "
+                    "GTC (~$%.2f) | mkt %s %.0f%%",
                     opp.pick,
                     side.upper(),
                     count,
-                    ask_cents,
                     price_cents,
-                    count * ask_cents / 100,
+                    mid_cents,
+                    count * price_cents / 100,
                     opp.direction,
                     opp.market_implied_prob * 100,
                 )
@@ -508,7 +499,7 @@ class KalshiTrader:
                         opp,
                         count=count,
                         side=side,
-                        price_cents=ask_cents,
+                        price_cents=price_cents,
                     )
                 results.append(
                     OrderResult(
@@ -517,7 +508,7 @@ class KalshiTrader:
                         action="buy",
                         count=count,
                         side=side,
-                        price_cents=ask_cents,
+                        price_cents=price_cents,
                         stake_usd=opp.recommended_stake,
                         live=False,
                         success=True,
@@ -529,16 +520,11 @@ class KalshiTrader:
             try:
                 assert self._client is not None
                 logger.info(
-                    "Placing LIVE buy: %s %s x%d limit %d¢ (ask %d¢, mid %d¢, "
-                    "book yes_bid=%s yes_ask=%s) IOC",
+                    "Placing LIVE buy: %s %s x%d limit %d¢ (mid) GTC",
                     opp.market_ticker,
                     side.upper(),
                     count,
                     price_cents,
-                    ask_cents,
-                    mid_cents,
-                    yes_bid,
-                    yes_ask,
                 )
                 resp = self._client.create_order(body)
                 payload = _order_payload(resp)
@@ -546,23 +532,18 @@ class KalshiTrader:
                     payload.get("order_id", resp.get("order_id", ""))
                 )
                 filled_count = _filled_contract_count(resp, 0)
-                if filled_count <= 0:
-                    raise RuntimeError(
-                        "IOC buy did not fill "
-                        f"(fill_count={payload.get('fill_count_fp', payload.get('fill_count', 0))}, "
-                        f"remaining={payload.get('remaining_count', '?')}, "
-                        f"sent limit={price_cents}¢ count={count})"
-                    )
-                fill_price = _entry_price_from_fill(
-                    opp.direction, resp, ask_cents
-                )
                 mark_placed(
                     opp.market_ticker,
                     order_id,
                     side=side,
-                    entry_price_cents=fill_price,
-                    count=filled_count,
+                    entry_price_cents=price_cents,
+                    count=count if filled_count <= 0 else filled_count,
                 )
+                fill_price = price_cents
+                if filled_count > 0:
+                    fill_price = _entry_price_from_fill(
+                        opp.direction, resp, price_cents
+                    )
                 if self.paper:
                     self.paper.record_order_placed(
                         opp,
@@ -574,21 +555,31 @@ class KalshiTrader:
                         filled_count=filled_count,
                         fill_price_cents=fill_price,
                     )
-                logger.info(
-                    "ORDER FILLED: %s | %s $%.2f -> %d @ %d¢ | id=%s",
-                    opp.pick,
-                    side.upper(),
-                    opp.recommended_stake,
-                    filled_count,
-                    fill_price,
-                    order_id,
-                )
+                if filled_count > 0:
+                    logger.info(
+                        "ORDER FILLED: %s | %s $%.2f -> %d @ %d¢ | id=%s",
+                        opp.pick,
+                        side.upper(),
+                        opp.recommended_stake,
+                        filled_count,
+                        fill_price,
+                        order_id,
+                    )
+                else:
+                    logger.info(
+                        "ORDER PLACED (resting): %s | %s x%d @ %d¢ | id=%s",
+                        opp.pick,
+                        side.upper(),
+                        count,
+                        price_cents,
+                        order_id,
+                    )
                 results.append(
                     OrderResult(
                         ticker=opp.market_ticker,
                         pick=opp.pick,
                         action="buy",
-                        count=filled_count,
+                        count=filled_count if filled_count > 0 else count,
                         side=side,
                         price_cents=fill_price,
                         stake_usd=opp.recommended_stake,
