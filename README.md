@@ -80,7 +80,3 @@ btc-price-bot/
 ## Reusing kalshi-sports-bot credentials
 
 Copy the same `KALSHI_API_KEY` and `KALSHI_PRIVATE_KEY_PATH` from your sports bot `.env`. The trading client uses identical RSA-PSS signing.
-
-## Disclaimer
-
-This is experimental software for educational purposes. Prediction markets involve real financial risk. Past performance does not guarantee future results. Start with dry-run mode and small bankrolls.
